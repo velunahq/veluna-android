@@ -1,7 +1,7 @@
 # Veluna for Android
 
 <p align="center">
-  <img src="fastlane/metadata/android/en-US/images/icon_round.webp" alt="Veluna Logo" width="100" />
+  <img src="veluna_icon.png" alt="Veluna Logo" width="100" />
 </p>
 
 <p align="center">
