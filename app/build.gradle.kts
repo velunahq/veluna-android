@@ -1,350 +1,174 @@
-import java.util.Properties
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-
-val localProperties = Properties()
-val localPropertiesFile = rootProject.file("local.properties")
-
-if (localPropertiesFile.exists()) {
-  localProperties.load(localPropertiesFile.inputStream())
-}
+import java.time.Duration
 
 plugins {
-  id("com.android.application")
-  alias(libs.plugins.hilt)
-  alias(libs.plugins.kotlin.ksp)
-  alias(libs.plugins.compose.compiler)
-  alias(libs.plugins.kotlin.serialization)
-  alias(libs.plugins.protobufPlugin)
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.google.services)
 }
 
 android {
-  namespace = "com.veluna"
-  compileSdk = 37
-  ndkVersion = "28.2.13676358"
+    namespace = "com.example"
+    compileSdk = 36
 
-  defaultConfig {
-    applicationId = "com.github.veluna"
-    minSdk = 26
-    targetSdk = 36
-    versionCode = 1
-    versionName = "0.1.0"
-
-    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    vectorDrawables.useSupportLibrary = true
-
-    // LastFM API keys from GitHub Secrets
-    val lastFmKey = "266d77b5790e413ada7e41ef100d017a"
-    val lastFmSecret = "41d3ae3b039ddac06c37fb30055bf93b"
-
-    buildConfigField("String", "LASTFM_API_KEY", "\"$lastFmKey\"")
-    buildConfigField("String", "LASTFM_SECRET", "\"$lastFmSecret\"")
-
-    // GitHub OAuth keys
-    val githubClientId =
-      localProperties.getProperty("GH_CLIENT_ID") ?: System.getenv("GH_CLIENT_ID") ?: ""
-    val githubClientSecret =
-      localProperties.getProperty("GH_CLIENT_SECRET") ?: System.getenv("GH_CLIENT_SECRET") ?: ""
-    buildConfigField("String", "GH_CLIENT_ID", "\"$githubClientId\"")
-    buildConfigField("String", "GH_CLIENT_SECRET", "\"$githubClientSecret\"")
-
-    buildConfigField(
-      "String",
-      "FLOW_NEURO_BASE_URL",
-      project.findProperty("FLOW_NEURO_BASE_URL")?.toString()?.let { "\"$it\"" }
-        ?: "\"https://api.flowneuroengine.com\""
-    )
-    buildConfigField(
-      "String",
-      "FLOW_NEURO_API_KEY",
-      project.findProperty("FLOW_NEURO_API_KEY")?.toString()?.let { "\"$it\"" } ?: "\"\""
-    )
-
-    // add nightly build label support
-    val isNightly = project.hasProperty("nightly") && project.property("nightly") == "true"
-    buildConfigField("Boolean", "IS_NIGHTLY", isNightly.toString())
-
-    val discordApplicationId = "1518210534070292541"
-    val discordApplicationIdLong = 1518210534070292541L
-    val discordRedirectScheme = "discord-$discordApplicationId"
-
-    buildConfigField("String", "DISCORD_APPLICATION_ID", "\"$discordApplicationId\"")
-    buildConfigField("long", "DISCORD_APPLICATION_ID_LONG", "${discordApplicationIdLong}L")
-    buildConfigField("String", "DISCORD_REDIRECT_SCHEME", "\"$discordRedirectScheme\"")
-    manifestPlaceholders["discordRedirectScheme"] = discordRedirectScheme
-  }
-
-  flavorDimensions += listOf("abi", "variant")
-  productFlavors {
-    // FOSS variant (default) - no Google Play Services
-    create("foss") {
-      dimension = "variant"
-      isDefault = true
-      buildConfigField("Boolean", "CAST_AVAILABLE", "false")
+    defaultConfig {
+        applicationId = "com.veluna.music"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = (project.findProperty("velunaVersionCode") as? String)?.toIntOrNull() ?: 1
+        versionName = (project.findProperty("velunaVersionName") as? String)?.takeIf { it.isNotBlank() } ?: "1.0.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // GMS variant - with Google Cast support (requires Google Play Services)
-    create("gms") {
-      dimension = "variant"
-      buildConfigField("Boolean", "CAST_AVAILABLE", "true")
+    signingConfigs {
+        create("debugConfig") {
+            val keystoreFile = file("${rootDir}/debug.keystore")
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+        create("release") {
+            val path = System.getenv("RELEASE_KEYSTORE_PATH")
+            if (!path.isNullOrBlank()) {
+                storeFile = file(path)
+                storePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+            }
+        }
     }
 
-    create("universal") {
-      dimension = "abi"
-      buildConfigField("String", "ARCHITECTURE", "\"universal\"")
+    buildTypes {
+        release {
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            signingConfig = signingConfigs.getByName("release")
+        }
+        debug {
+            val keystoreFile = file("${rootDir}/debug.keystore")
+            if (keystoreFile.exists()) {
+                signingConfig = signingConfigs.getByName("debugConfig")
+            }
+        }
     }
-    create("arm64") {
-      dimension = "abi"
-      buildConfigField("String", "ARCHITECTURE", "\"arm64\"")
-      ndk { abiFilters.add("arm64-v8a") }
-    }
-    create("armeabi") {
-      dimension = "abi"
-      buildConfigField("String", "ARCHITECTURE", "\"armeabi\"")
-      ndk { abiFilters.add("armeabi-v7a") }
-    }
-    create("x86") {
-      dimension = "abi"
-      buildConfigField("String", "ARCHITECTURE", "\"x86\"")
-      ndk { abiFilters.add("x86") }
-    }
-    create("x86_64") {
-      dimension = "abi"
-      buildConfigField("String", "ARCHITECTURE", "\"x86_64\"")
-      ndk { abiFilters.add("x86_64") }
-    }
-  }
 
-  signingConfigs {
-    create("persistentDebug") {
-      storeFile = file("persistent-debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
-    create("release") {
-      val keystoreFile = rootProject.file("keystore.jks")
-      if (keystoreFile.exists()) {
-        storeFile = keystoreFile
-      } else {
-        val localKeystore = file("keystore/release.keystore")
-        if (localKeystore.exists()) storeFile = localKeystore
-      }
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = System.getenv("KEY_ALIAS")
-      keyPassword = System.getenv("KEY_PASSWORD")
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
     }
-    getByName("debug") {
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
-      storePassword = "android"
-      storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+
+    lint {
+        error += "HardcodedText"
     }
-  }
 
-  buildTypes {
-    release {
-      isMinifyEnabled = true
-      isShrinkResources = true
-      isCrunchPngs = false
-      isDebuggable = false
-      signingConfig = signingConfigs.getByName("release")
-      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      buildConfigField("String", "ARCHITECTURE", "\"release\"")
+    sourceSets {
+        getByName("debug").assets.directories.add("$projectDir/schemas")
     }
-    debug {
-      applicationIdSuffix = ".debug"
-      isDebuggable = true
-      signingConfig = signingConfigs.getByName("debug")
-      buildConfigField("String", "ARCHITECTURE", "\"debug\"")
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
     }
-  }
-
-  compileOptions {
-    isCoreLibraryDesugaringEnabled = true
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
-  }
-
-  kotlin {
-    jvmToolchain(21)
-    compilerOptions {
-      freeCompilerArgs.add("-Xannotation-default-target=param-property")
-      jvmTarget.set(JvmTarget.JVM_21)
-    }
-  }
-
-  buildFeatures {
-    compose = true
-    buildConfig = true
-  }
-
-  dependenciesInfo {
-    includeInApk = false
-    includeInBundle = false
-  }
-
-  lint {
-    lintConfig = file("lint.xml")
-    warningsAsErrors = false
-    abortOnError = false
-    checkDependencies = false
-  }
-
-  androidResources { generateLocaleConfig = true }
-
-  packaging {
-    jniLibs {
-      useLegacyPackaging = true
-      keepDebugSymbols +=
-        listOf("**/libandroidx.graphics.path.so", "**/libdatastore_shared_counter.so")
-    }
-    resources {
-      excludes += "/META-INF/{AL2.0,LGPL2.1}"
-      excludes += "META-INF/NOTICE.md"
-      excludes += "META-INF/CONTRIBUTORS.md"
-      excludes += "META-INF/LICENSE.md"
-      excludes += "META-INF/INDEX.LIST"
-      excludes += "META-INF/io.netty.versions.properties"
-      excludes += "META-INF/DEPENDENCIES"
-    }
-  }
 }
 
-protobuf {
-  protoc { artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.get()}" }
-  generateProtoTasks {
-    all().forEach { task ->
-      task.builtins {
-        create("java") { option("lite") }
-        create("kotlin") { option("lite") }
-      }
-    }
-  }
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
-ksp {}
+// Room's exported schema is consumed by MigrationTestHelper from debug assets.
+// Generate it before Gradle snapshots those assets for the unit-test variant, and serialize KSP
+// invocations so debug and release tasks never write room.schemaLocation simultaneously.
+abstract class RoomSchemaLock : org.gradle.api.services.BuildService<org.gradle.api.services.BuildServiceParameters.None>
 
-tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-  compilerOptions {
-    freeCompilerArgs.addAll("-opt-in=kotlin.RequiresOptIn")
-    suppressWarnings.set(false)
-  }
+val roomSchemaLock = gradle.sharedServices.registerIfAbsent("roomSchemaLock", RoomSchemaLock::class.java) {
+    maxParallelUsages.set(1)
+}
+
+tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
+    dependsOn("kspDebugKotlin")
+}
+
+tasks.matching { it.name.startsWith("ksp") && it.name.endsWith("Kotlin") }.configureEach {
+    usesService(roomSchemaLock)
 }
 
 dependencies {
-  implementation("nl.dionsegijn:konfetti-compose:2.0.4")
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.activity.compose)
 
-  implementation(project(":core"))
-  implementation(project(":playback"))
-  implementation(project(":audio-dsp"))
-  implementation(project(":dsp-core"))
-  implementation(project(":usbaudio"))
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material3.window.size)
+    implementation(libs.androidx.compose.material.icons.extended)
+    debugImplementation(libs.androidx.compose.ui.tooling)
 
-  // GMS Location Services for high-accuracy weather AI context
-  "gmsImplementation"(libs.play.services.location)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.android)
 
-  implementation(libs.haze)
-  implementation(libs.guava)
-  implementation(libs.coroutines.guava)
-  implementation(libs.concurrent.futures)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
-  implementation(libs.activity)
-  implementation(libs.hilt.navigation)
-  implementation(libs.datastore)
+    implementation(libs.androidx.datastore.preferences)
 
-  implementation(libs.compose.runtime)
-  implementation(libs.compose.foundation)
-  implementation(libs.compose.ui)
-  implementation(libs.compose.ui.util)
-  implementation(libs.compose.ui.tooling)
-  implementation(libs.compose.animation)
-  implementation(libs.compose.reorderable)
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.exoplayer.hls)
+    implementation(libs.androidx.media3.datasource.okhttp)
+    implementation(libs.androidx.media3.session)
+    implementation(libs.androidx.media3.common)
 
-  implementation(libs.viewmodel)
-  implementation(libs.viewmodel.compose)
-  implementation(libs.lifecycle.process)
+    implementation(libs.okhttp)
+    implementation(libs.coil.compose)
+    implementation(libs.androidx.palette.ktx)
 
-  implementation(libs.material3)
-  implementation(libs.androidx.adaptive)
-  implementation(libs.androidx.adaptive.layout)
-  implementation(libs.androidx.adaptive.navigation)
-  implementation(libs.palette)
-  implementation(libs.materialKolor)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.firestore)
+    implementation(libs.firebase.auth)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services)
+    implementation(libs.googleid)
+    implementation(libs.kotlinx.coroutines.play.services)
 
-  implementation(libs.appcompat)
+    testImplementation(libs.junit)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.truth)
+    testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.kotlinx.coroutines.test)
 
-  implementation(libs.coil)
-  implementation(libs.coil.network.okhttp)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.truth)
+}
 
-  implementation(libs.ucrop)
-
-  implementation(libs.shimmer)
-
-  implementation(libs.media3)
-  implementation(libs.media3.session)
-  implementation(libs.media3.hls)
-  implementation(libs.media3.ui)
-  implementation(libs.media3.okhttp)
-  implementation(libs.media3.cronet)
-  implementation("com.google.android.gms:play-services-cronet:18.0.1")
-
-  // Google Cast - only included in GMS flavor
-  "gmsImplementation"(libs.mediarouter)
-  "gmsImplementation"(libs.cast.framework)
-
-  implementation(libs.room.runtime)
-  implementation(libs.kuromoji.ipadic)
-  implementation(libs.tinypinyin)
-
-  implementation(libs.room.ktx)
-
-  implementation(libs.apache.lang3)
-
-  implementation(libs.hilt)
-  ksp(libs.hilt.compiler)
-  ksp("org.jetbrains.kotlin:kotlin-metadata-jvm:2.4.20")
-  annotationProcessor("org.jetbrains.kotlin:kotlin-metadata-jvm:2.4.20")
-
-  implementation(project(":innertube"))
-  implementation("com.github.MetrolistGroup.innertubex:innertubex-android:v0.7.0")
-
-  implementation(project(":lyrics"))
-  implementation(project(":kugou"))
-  implementation(project(":lrclib"))
-  implementation(project(":betterlyrics"))
-  implementation(project(":simpmusic"))
-  implementation(project(":youlyplus"))
-  implementation(project(":canvas"))
-  implementation(project(":shazamkit"))
-  implementation(project(":artistvideo"))
-  implementation(project(":applecanvas"))
-  implementation(project(":velunacanvas"))
-  implementation(project(":paxsenixlyrics"))
-  implementation(project(":unison"))
-
-  implementation(libs.ktor.client.core)
-  implementation(libs.retrofit)
-  implementation(libs.retrofit.gson)
-  implementation(libs.ktor.client.okhttp)
-  implementation(libs.ktor.client.content.negotiation)
-  implementation(libs.ktor.serialization.json)
-
-  // Protobuf for message serialization (lite version for Android)
-  implementation(libs.protobuf.javalite)
-  implementation(libs.protobuf.kotlin.lite)
-
-  coreLibraryDesugaring(libs.desugaring)
-  implementation(libs.timber)
-  implementation(libs.smoothCorner)
-  implementation(libs.lottie.compose)
-  implementation("androidx.compose.material:material-icons-extended:1.7.8")
-  implementation(libs.work.runtime.ktx)
-  implementation(libs.androidx.core.splashscreen)
-  implementation(libs.ffmpeg.kit.audio)
-  implementation("io.github.dokar3:quickjs-kt-android:1.0.14")
-  implementation("com.microsoft.onnxruntime:onnxruntime-android:1.28.0")
-
-  testImplementation(libs.junit)
-  testImplementation(libs.kotlinx.coroutines.test)
-  testImplementation(libs.robolectric)
+tasks.withType<Test> {
+    failFast = true
+    timeout.set(Duration.ofMinutes(10))
+    testLogging {
+        events("passed", "failed", "skipped")
+    }
 }

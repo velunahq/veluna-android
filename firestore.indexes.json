@@ -1,0 +1,37 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "liked_songs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "deleted", "order": "ASCENDING" },
+        { "fieldPath": "clientUpdatedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "playlists",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "deleted", "order": "ASCENDING" },
+        { "fieldPath": "clientUpdatedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "taste_seeds",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "deleted", "order": "ASCENDING" },
+        { "fieldPath": "clientUpdatedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "hidden_artists",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "deleted", "order": "ASCENDING" },
+        { "fieldPath": "clientUpdatedAt", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

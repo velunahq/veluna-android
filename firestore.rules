@@ -1,0 +1,608 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny all reads and writes unless explicitly matched below
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isNonLocalTrackId(id) {
+      return isValidId(id) && !id.matches('^LOCAL.*');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Bounds server timestamps against future clock values (<= request.time).
+    function isNotFutureTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    // Allows up to +5 minutes clock skew on client-side LWW timestamps while blocking far-future values.
+    function isValidClientTimestamp(tsMs) {
+      return tsMs is int && tsMs >= 0 && tsMs <= request.time.toMillis() + 300000;
+    }
+
+    function isValidOptionalString(data, key, maxLen) {
+      return !(key in data) || data[key] == null || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function isTombstone(data) {
+      return data.deleted == true &&
+             isValidClientTimestamp(data.clientUpdatedAt) &&
+             isNotFutureTimestamp(data.updatedAt);
+    }
+
+    function isValidMutationStamp(stamp) {
+      return stamp is map &&
+             stamp.size() == 4 &&
+             stamp.keys().hasAll(['timestampMs', 'seq', 'deviceId', 'opId']) &&
+             stamp.timestampMs is int && stamp.timestampMs >= 0 &&
+             stamp.seq is int && stamp.seq >= 0 &&
+             stamp.deviceId is string && stamp.deviceId.size() <= 128 &&
+             stamp.opId is string && stamp.opId.size() <= 128;
+    }
+
+    function isValidFieldStamps(fs) {
+      return fs is map &&
+             fs.size() <= 4 &&
+             fs.keys().hasOnly(['title', 'description', 'cover', 'order']) &&
+             (!('title' in fs) || isValidMutationStamp(fs.title)) &&
+             (!('description' in fs) || isValidMutationStamp(fs.description)) &&
+             (!('cover' in fs) || isValidMutationStamp(fs.cover)) &&
+             (!('order' in fs) || isValidMutationStamp(fs.order));
+    }
+
+    function isValidPlaylistCausalMeta(data) {
+      return isValidOptionalString(data, 'lastDeviceId', 128) &&
+             (!('lastOpSeq' in data) || (data.lastOpSeq is int && data.lastOpSeq >= 0)) &&
+             isValidOptionalString(data, 'lastOpId', 128) &&
+             (!('fieldStamps' in data) || isValidFieldStamps(data.fieldStamps)) &&
+             (!('trackTombstones' in data) ||
+              (data.trackTombstones is map && data.trackTombstones.size() <= 500));
+    }
+
+    function isValidPlaylistTombstone(data) {
+      return isTombstone(data) &&
+             (!('syncRevision' in data) || (data.syncRevision is int && data.syncRevision >= 0)) &&
+             (!('activeSnapshotId' in data) || data.activeSnapshotId == null) &&
+             (!('trackCount' in data) || data.trackCount == 0) &&
+             (!('coverRemoved' in data) || data.coverRemoved is bool);
+    }
+
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             isValidOptionalString(data, 'email', 200) &&
+             isValidOptionalString(data, 'photoUrl', 500) &&
+             data.themePreset is string && data.themePreset.size() >= 1 && data.themePreset.size() <= 32 &&
+             data.themeMode in ['DARK', 'LIGHT', 'SYSTEM'] &&
+             isValidOptionalString(data, 'customAccentHex', 16) &&
+             data.adaptToArtwork is bool &&
+             data.cornerRadiusDp is int && data.cornerRadiusDp >= 4 && data.cornerRadiusDp <= 24 &&
+             data.audioQuality in ['LOW', 'MEDIUM', 'HIGH'] &&
+             data.autoplay is bool &&
+             data.loudnessNormalization is bool &&
+             data.hideMusicVideos is bool &&
+             data.selectedGenres is list && data.selectedGenres.size() <= 25 &&
+             (data.selectedGenres.size() == 0 || data.selectedGenres[0] is string) &&
+             data.onboardingCompleted is bool &&
+             (!('prefsUpdatedAt' in data) || isValidClientTimestamp(data.prefsUpdatedAt)) &&
+             (!('tombstoneCompactedBeforeMs' in data) || isValidClientTimestamp(data.tombstoneCompactedBeforeMs)) &&
+             (!('syncGeneration' in data) || (data.syncGeneration is int && data.syncGeneration >= 0)) &&
+             isNotFutureTimestamp(data.createdAt) &&
+             isNotFutureTimestamp(data.updatedAt);
+    }
+
+    function isValidTasteSeed(data) {
+      return data.deleted == false &&
+             isValidClientTimestamp(data.clientUpdatedAt) &&
+             data.kind in ['ARTIST', 'SONG'] &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 160 &&
+             isValidOptionalString(data, 'subtitle', 160) &&
+             isValidOptionalString(data, 'thumbnail', 500) &&
+             isNotFutureTimestamp(data.updatedAt);
+    }
+
+    function isValidLikedSong(data) {
+      return data.deleted == false &&
+             isValidClientTimestamp(data.clientUpdatedAt) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+             data.artists is string && data.artists.size() <= 200 &&
+             isValidOptionalString(data, 'album', 200) &&
+             isValidOptionalString(data, 'albumId', 128) &&
+             isValidOptionalString(data, 'artistId', 128) &&
+             isValidOptionalString(data, 'duration', 24) &&
+             data.durationSecs is int && data.durationSecs >= 0 &&
+             isValidOptionalString(data, 'thumbnail', 500) &&
+             data.explicit is bool &&
+             data.likedAt is int && data.likedAt >= 0 &&
+             isNotFutureTimestamp(data.updatedAt);
+    }
+
+    function isValidSyncedPlaylist(data) {
+      return data.deleted == false &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.description is string && data.description.size() <= 500 &&
+             isValidOptionalString(data, 'coverUri', 500) &&
+             (!('coverRemoved' in data) || data.coverRemoved is bool) &&
+             !('tracks' in data) &&
+             (!('syncRevision' in data) || (data.syncRevision is int && data.syncRevision >= 0)) &&
+             (!('activeSnapshotId' in data) || data.activeSnapshotId == null || isValidId(data.activeSnapshotId)) &&
+             (!('trackCount' in data) || (data.trackCount is int && data.trackCount >= 0)) &&
+             isValidClientTimestamp(data.clientUpdatedAt) &&
+             isNotFutureTimestamp(data.updatedAt);
+    }
+
+    function isValidPlaylistSnapshot(data) {
+      return data.state in ['STAGING', 'COMMITTED', 'DELETING'] &&
+             data.syncRevision is int && data.syncRevision >= 1 &&
+             data.trackCount is int && data.trackCount >= 0 &&
+             isValidClientTimestamp(data.clientUpdatedAt) &&
+             isNotFutureTimestamp(data.createdAt) &&
+             isNotFutureTimestamp(data.updatedAt);
+    }
+
+    function isValidPlaylistTrack(data) {
+      return data.deleted == false &&
+             isValidClientTimestamp(data.clientUpdatedAt) &&
+             data.videoId is string && data.videoId.size() >= 1 && data.videoId.size() <= 128 &&
+             !data.videoId.matches('^LOCAL:.*') &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+             data.artists is string && data.artists.size() <= 200 &&
+             isValidOptionalString(data, 'album', 200) &&
+             isValidOptionalString(data, 'albumId', 128) &&
+             isValidOptionalString(data, 'artistId', 128) &&
+             isValidOptionalString(data, 'duration', 24) &&
+             data.durationSecs is int && data.durationSecs >= 0 &&
+             isValidOptionalString(data, 'thumbnail', 500) &&
+             data.explicit is bool &&
+             data.position is int && data.position >= 0 &&
+             data.addedAt is int && data.addedAt >= 0 &&
+             (!('opTs' in data) || isValidClientTimestamp(data.opTs)) &&
+             (!('opSeq' in data) || (data.opSeq is int && data.opSeq >= 0)) &&
+             isValidOptionalString(data, 'deviceId', 128) &&
+             isValidOptionalString(data, 'opId', 128) &&
+             isNotFutureTimestamp(data.updatedAt);
+    }
+
+    function isValidHiddenArtist(data) {
+      return data.deleted == false &&
+             isValidClientTimestamp(data.clientUpdatedAt) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 160 &&
+             isValidOptionalString(data, 'channelId', 128) &&
+             data.blockedAt is int && data.blockedAt >= 0 &&
+             isNotFutureTimestamp(data.updatedAt);
+    }
+
+    function createdAtPreservedOnUpdate() {
+      return (!('createdAt' in existing()) && (!('createdAt' in incoming()) || isNotFutureTimestamp(incoming().createdAt))) ||
+             (('createdAt' in incoming()) && incoming().createdAt == existing().createdAt);
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'userId', 'displayName', 'themePreset', 'themeMode',
+                         'adaptToArtwork', 'cornerRadiusDp', 'audioQuality',
+                         'autoplay', 'loudnessNormalization', 'hideMusicVideos',
+                         'selectedGenres', 'onboardingCompleted', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'displayName', 'email', 'photoUrl', 'themePreset', 'themeMode',
+                         'customAccentHex', 'adaptToArtwork', 'cornerRadiusDp', 'audioQuality',
+                         'autoplay', 'loudnessNormalization', 'hideMusicVideos',
+                         'selectedGenres', 'onboardingCompleted', 'prefsUpdatedAt',
+                         'tombstoneCompactedBeforeMs', 'syncGeneration', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidUserProfile(incoming()) &&
+                       (!('tombstoneCompactedBeforeMs' in existing()) ||
+                        !('tombstoneCompactedBeforeMs' in incoming()) ||
+                        incoming().tombstoneCompactedBeforeMs >= existing().tombstoneCompactedBeforeMs) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'displayName', 'email', 'photoUrl', 'themePreset', 'themeMode',
+                         'customAccentHex', 'adaptToArtwork', 'cornerRadiusDp', 'audioQuality',
+                         'autoplay', 'loudnessNormalization', 'hideMusicVideos',
+                         'selectedGenres', 'onboardingCompleted', 'prefsUpdatedAt',
+                         'tombstoneCompactedBeforeMs', 'syncGeneration', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /taste_seeds/{seedId} {
+        allow get: if isOwner(userId) && isValidId(seedId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(seedId) &&
+                         isNotFutureTimestamp(incoming().createdAt) &&
+                         (
+                           (incoming().keys().hasAll(['kind', 'name', 'deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                            incoming().keys().hasOnly(['kind', 'name', 'subtitle', 'thumbnail', 'deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                            isValidTasteSeed(incoming())) ||
+                           (incoming().keys().hasAll(['deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                            incoming().keys().hasOnly(['deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                            isTombstone(incoming()))
+                         );
+
+        allow update: if isOwner(userId) &&
+                         isValidId(seedId) &&
+                         createdAtPreservedOnUpdate() &&
+                         (
+                           (isValidTasteSeed(incoming()) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'kind', 'name', 'subtitle', 'thumbnail', 'deleted', 'clientUpdatedAt', 'updatedAt'
+                            ])) ||
+                           (isTombstone(incoming()) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'deleted', 'clientUpdatedAt', 'updatedAt'
+                            ]))
+                         );
+
+        allow delete: if isOwner(userId) && isValidId(seedId);
+      }
+
+      match /liked_songs/{videoId} {
+        allow get: if isOwner(userId) && isValidId(videoId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isNonLocalTrackId(videoId) &&
+                         isNotFutureTimestamp(incoming().createdAt) &&
+                         (
+                           (incoming().keys().hasAll([
+                              'title', 'artists', 'durationSecs', 'explicit', 'likedAt',
+                              'deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt'
+                            ]) &&
+                            incoming().keys().hasOnly([
+                              'title', 'artists', 'album', 'albumId', 'artistId', 'duration',
+                              'durationSecs', 'thumbnail', 'explicit', 'likedAt',
+                              'deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt'
+                            ]) &&
+                            isValidLikedSong(incoming())) ||
+                           (incoming().keys().hasAll(['deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                            incoming().keys().hasOnly(['deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                            isTombstone(incoming()))
+                         );
+
+        allow update: if isOwner(userId) &&
+                         isNonLocalTrackId(videoId) &&
+                         createdAtPreservedOnUpdate() &&
+                         (
+                           (isValidLikedSong(incoming()) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'title', 'artists', 'album', 'albumId', 'artistId', 'duration',
+                              'durationSecs', 'thumbnail', 'explicit', 'likedAt',
+                              'deleted', 'clientUpdatedAt', 'updatedAt'
+                            ])) ||
+                           (isTombstone(incoming()) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'deleted', 'clientUpdatedAt', 'updatedAt'
+                            ]))
+                         );
+
+        allow delete: if isOwner(userId) && isValidId(videoId);
+      }
+
+      match /playlists/{playlistKey} {
+        function snapshotMatchesParent(snapData, inc) {
+          return snapData.state == 'COMMITTED' &&
+                 snapData.syncRevision == inc.syncRevision &&
+                 snapData.trackCount == inc.trackCount;
+        }
+
+        function isCommittedSnapshotTarget(snapId, inc) {
+          let snapPath = /databases/$(database)/documents/users/$(userId)/playlists/$(playlistKey)/snapshots/$(snapId);
+          return ('syncRevision' in inc) &&
+                 inc.syncRevision is int &&
+                 inc.syncRevision >= 1 &&
+                 ('trackCount' in inc) &&
+                 inc.trackCount is int &&
+                 inc.trackCount >= 0 &&
+                 exists(snapPath) &&
+                 snapshotMatchesParent(get(snapPath).data, inc);
+        }
+
+        function isMonotonicPlaylistUpdate(inc, ext) {
+          let prevRev = ext.get('syncRevision', 0);
+          let revValid = (!('syncRevision' in ext) &&
+                          (!('syncRevision' in inc) || (inc.syncRevision is int && inc.syncRevision >= 0))) ||
+                         (('syncRevision' in ext) &&
+                          ('syncRevision' in inc) &&
+                          inc.syncRevision is int &&
+                          inc.syncRevision >= ext.syncRevision);
+          let unDeleteValid = !(ext.deleted == true && inc.deleted == false) ||
+                              ('syncRevision' in inc && inc.syncRevision is int && inc.syncRevision > prevRev);
+          return revValid && unDeleteValid;
+        }
+
+        function canCreatePlaylist() {
+          let inc = request.resource.data;
+          return isOwner(userId) &&
+                 isValidId(playlistKey) &&
+                 isNotFutureTimestamp(inc.createdAt) &&
+                 isValidPlaylistCausalMeta(inc) &&
+                 (
+                   (inc.keys().hasAll([
+                      'title', 'description', 'deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt'
+                    ]) &&
+                    inc.keys().hasOnly([
+                      'title', 'description', 'coverUri', 'coverRemoved', 'deleted',
+                      'syncRevision', 'activeSnapshotId', 'trackCount',
+                      'lastDeviceId', 'lastOpSeq', 'lastOpId', 'fieldStamps', 'trackTombstones',
+                      'clientUpdatedAt', 'createdAt', 'updatedAt'
+                    ]) &&
+                    isValidSyncedPlaylist(inc) &&
+                    (!('activeSnapshotId' in inc) ||
+                     inc.activeSnapshotId == null ||
+                     isCommittedSnapshotTarget(inc.activeSnapshotId, inc))) ||
+                   (inc.keys().hasAll(['deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                    inc.keys().hasOnly([
+                      'deleted', 'syncRevision', 'activeSnapshotId', 'trackCount', 'coverRemoved',
+                      'lastDeviceId', 'lastOpSeq', 'lastOpId', 'fieldStamps', 'trackTombstones',
+                      'clientUpdatedAt', 'createdAt', 'updatedAt'
+                    ]) &&
+                    isValidPlaylistTombstone(inc))
+                 );
+        }
+
+        function canUpdatePlaylist() {
+          let inc = request.resource.data;
+          let ext = resource.data;
+          let diffKeys = inc.diff(ext).affectedKeys();
+          return isOwner(userId) &&
+                 isValidId(playlistKey) &&
+                 createdAtPreservedOnUpdate() &&
+                 isMonotonicPlaylistUpdate(inc, ext) &&
+                 isValidPlaylistCausalMeta(inc) &&
+                 diffKeys.hasOnly([
+                   'title', 'description', 'coverUri', 'coverRemoved', 'tracks', 'deleted',
+                   'syncRevision', 'activeSnapshotId', 'trackCount',
+                   'lastDeviceId', 'lastOpSeq', 'lastOpId', 'fieldStamps', 'trackTombstones',
+                   'clientUpdatedAt', 'updatedAt'
+                 ]) &&
+                 (
+                   (isValidSyncedPlaylist(inc) &&
+                    (!('activeSnapshotId' in inc) ||
+                     inc.activeSnapshotId == null ||
+                     isCommittedSnapshotTarget(inc.activeSnapshotId, inc))) ||
+                   (isValidPlaylistTombstone(inc) &&
+                    !diffKeys.hasAny(['title', 'description', 'coverUri']))
+                 );
+        }
+
+        allow get: if isOwner(userId) && isValidId(playlistKey);
+        allow list: if isOwner(userId);
+        allow create: if canCreatePlaylist();
+        allow update: if canUpdatePlaylist();
+        allow delete: if isOwner(userId) && isValidId(playlistKey);
+
+        match /snapshots/{snapshotId} {
+          function isParentReferencingSnapshot() {
+            let plPath = /databases/$(database)/documents/users/$(userId)/playlists/$(playlistKey);
+            return exists(plPath) && get(plPath).data.get('activeSnapshotId', null) == snapshotId;
+          }
+
+          allow get: if isOwner(userId) && isValidId(playlistKey) && isValidId(snapshotId);
+          allow list: if isOwner(userId) && isValidId(playlistKey);
+
+          allow create: if isOwner(userId) &&
+                           isValidId(playlistKey) &&
+                           isValidId(snapshotId) &&
+                           incoming().keys().hasAll([
+                             'state', 'syncRevision', 'trackCount',
+                             'clientUpdatedAt', 'createdAt', 'updatedAt'
+                           ]) &&
+                           incoming().keys().hasOnly([
+                             'state', 'syncRevision', 'trackCount',
+                             'clientUpdatedAt', 'createdAt', 'updatedAt'
+                           ]) &&
+                           incoming().state == 'STAGING' &&
+                           isValidPlaylistSnapshot(incoming());
+
+          allow update: if isOwner(userId) &&
+                           isValidId(playlistKey) &&
+                           isValidId(snapshotId) &&
+                           createdAtPreservedOnUpdate() &&
+                           isValidPlaylistSnapshot(incoming()) &&
+                           incoming().syncRevision == existing().syncRevision &&
+                           incoming().trackCount == existing().trackCount &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['state', 'updatedAt']) &&
+                           (
+                             (existing().state == 'STAGING' && incoming().state == 'COMMITTED') ||
+                             ((existing().state == 'STAGING' || existing().state == 'COMMITTED') &&
+                              incoming().state == 'DELETING' &&
+                              !isParentReferencingSnapshot())
+                           );
+
+          allow delete: if isOwner(userId) &&
+                           isValidId(playlistKey) &&
+                           isValidId(snapshotId) &&
+                           existing().state == 'DELETING' &&
+                           !isParentReferencingSnapshot();
+
+          match /tracks/{trackDocId} {
+            function parentSnapshotRef() {
+              return /databases/$(database)/documents/users/$(userId)/playlists/$(playlistKey)/snapshots/$(snapshotId);
+            }
+
+            function isStagingSnapshot() {
+              let snapPath = parentSnapshotRef();
+              return exists(snapPath) && get(snapPath).data.state == 'STAGING';
+            }
+
+            function canDeleteSnapshotTrack() {
+              let snapPath = parentSnapshotRef();
+              return exists(snapPath) &&
+                     get(snapPath).data.state == 'DELETING' &&
+                     !isParentReferencingSnapshot();
+            }
+
+            allow get: if isOwner(userId) && isValidId(playlistKey) && isValidId(snapshotId) && isNonLocalTrackId(trackDocId);
+            allow list: if isOwner(userId) && isValidId(playlistKey) && isValidId(snapshotId);
+
+            allow create: if isOwner(userId) &&
+                             isValidId(playlistKey) &&
+                             isValidId(snapshotId) &&
+                             isNonLocalTrackId(trackDocId) &&
+                             isStagingSnapshot() &&
+                             isNotFutureTimestamp(incoming().createdAt) &&
+                             incoming().keys().hasAll([
+                               'videoId', 'title', 'artists', 'durationSecs', 'explicit',
+                               'position', 'addedAt', 'deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt'
+                             ]) &&
+                             incoming().keys().hasOnly([
+                               'videoId', 'title', 'artists', 'album', 'albumId', 'artistId',
+                               'duration', 'durationSecs', 'thumbnail', 'explicit',
+                               'position', 'addedAt', 'opTs', 'opSeq', 'deviceId', 'opId',
+                               'deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt'
+                             ]) &&
+                             isValidPlaylistTrack(incoming());
+
+            allow update: if isOwner(userId) &&
+                             isValidId(playlistKey) &&
+                             isValidId(snapshotId) &&
+                             isNonLocalTrackId(trackDocId) &&
+                             isStagingSnapshot() &&
+                             createdAtPreservedOnUpdate() &&
+                             isValidPlaylistTrack(incoming()) &&
+                             incoming().diff(existing()).affectedKeys().hasOnly([
+                               'videoId', 'title', 'artists', 'album', 'albumId', 'artistId',
+                               'duration', 'durationSecs', 'thumbnail', 'explicit',
+                               'position', 'addedAt', 'opTs', 'opSeq', 'deviceId', 'opId',
+                               'deleted', 'clientUpdatedAt', 'updatedAt'
+                             ]);
+
+            allow delete: if isOwner(userId) &&
+                             isValidId(playlistKey) &&
+                             isValidId(snapshotId) &&
+                             isValidId(trackDocId) &&
+                             canDeleteSnapshotTrack();
+          }
+        }
+
+        // Legacy tracks subcollection kept readable/deletable during transition from pre-snapshot playlists
+        match /tracks/{videoId} {
+          allow get: if isOwner(userId) && isNonLocalTrackId(playlistKey) && isNonLocalTrackId(videoId);
+          allow list: if isOwner(userId) && isValidId(playlistKey);
+
+          allow create: if isOwner(userId) &&
+                           isValidId(playlistKey) &&
+                           isNonLocalTrackId(videoId) &&
+                           isNotFutureTimestamp(incoming().createdAt) &&
+                           (
+                             (incoming().keys().hasAll([
+                                'videoId', 'title', 'artists', 'durationSecs', 'explicit',
+                                'position', 'addedAt', 'deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt'
+                              ]) &&
+                              incoming().keys().hasOnly([
+                                'videoId', 'title', 'artists', 'album', 'albumId', 'artistId',
+                                'duration', 'durationSecs', 'thumbnail', 'explicit',
+                                'position', 'addedAt', 'opTs', 'opSeq', 'deviceId', 'opId',
+                                'deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt'
+                              ]) &&
+                              isValidPlaylistTrack(incoming())) ||
+                             (incoming().keys().hasAll(['deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                              incoming().keys().hasOnly(['deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                              isTombstone(incoming()))
+                           );
+
+          allow update: if isOwner(userId) &&
+                           isValidId(playlistKey) &&
+                           isNonLocalTrackId(videoId) &&
+                           createdAtPreservedOnUpdate() &&
+                           (
+                             (isValidPlaylistTrack(incoming()) &&
+                              incoming().diff(existing()).affectedKeys().hasOnly([
+                                'videoId', 'title', 'artists', 'album', 'albumId', 'artistId',
+                                'duration', 'durationSecs', 'thumbnail', 'explicit',
+                                'position', 'addedAt', 'opTs', 'opSeq', 'deviceId', 'opId',
+                                'deleted', 'clientUpdatedAt', 'updatedAt'
+                              ])) ||
+                             (isTombstone(incoming()) &&
+                              incoming().diff(existing()).affectedKeys().hasOnly([
+                                'deleted', 'clientUpdatedAt', 'updatedAt'
+                              ]))
+                           );
+
+          allow delete: if isOwner(userId) && isValidId(playlistKey) && isValidId(videoId);
+        }
+      }
+
+      match /hidden_artists/{artistKey} {
+        allow get: if isOwner(userId) && isValidId(artistKey);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(artistKey) &&
+                         isNotFutureTimestamp(incoming().createdAt) &&
+                         (
+                           (incoming().keys().hasAll(['name', 'blockedAt', 'deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                            incoming().keys().hasOnly(['name', 'channelId', 'blockedAt', 'deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                            isValidHiddenArtist(incoming())) ||
+                           (incoming().keys().hasAll(['deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                            incoming().keys().hasOnly(['deleted', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
+                            isTombstone(incoming()))
+                         );
+
+        allow update: if isOwner(userId) &&
+                         isValidId(artistKey) &&
+                         createdAtPreservedOnUpdate() &&
+                         (
+                           (isValidHiddenArtist(incoming()) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'name', 'channelId', 'blockedAt', 'deleted', 'clientUpdatedAt', 'updatedAt'
+                            ])) ||
+                           (isTombstone(incoming()) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'deleted', 'clientUpdatedAt', 'updatedAt'
+                            ]))
+                         );
+
+        allow delete: if isOwner(userId) && isValidId(artistKey);
+      }
+
+      match /sync_meta/{metaId} {
+        allow get: if isOwner(userId) && isValidId(metaId);
+        allow list: if isOwner(userId);
+        allow create, update: if isOwner(userId) &&
+                                 isValidId(metaId) &&
+                                 metaId == 'clock' &&
+                                 incoming().keys().hasAll(['serverTime']) &&
+                                 incoming().keys().hasOnly(['serverTime']) &&
+                                 isNotFutureTimestamp(incoming().serverTime);
+        allow delete: if isOwner(userId) && isValidId(metaId);
+      }
+    }
+  }
+}

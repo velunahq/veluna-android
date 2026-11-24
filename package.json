@@ -1,0 +1,12 @@
+{
+  "name": "veluna-android-tests",
+  "private": true,
+  "description": "Local Firestore security rules verification tests for Veluna Android",
+  "scripts": {
+    "test": "node --test firestore.test.js"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "firebase-tools": "^15.37.0"
+  }
+}

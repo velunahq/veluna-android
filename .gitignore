@@ -1,41 +1,43 @@
-*.iml
-.gradle
-/local.properties
-/.idea/
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
+# Gradle & Android build artifacts
+.gradle/
 .kotlin/
-
-# Mac
-.DS_Store
-
-# build folders
+.build-outputs/
 build/
 app/build/
-androidApp/build/
-composeApp/build/
-cast/build/
-cast-empty/build/
-crashlytics/build/
-crashlytics-empty/build/
-lastfm/build/
-lastfm-empty/build/
-*/build/
+captures/
+dist/
+*.apk
+*.ap_
+*.aab
+*.dex
 
-# Gradle
-.gradle/
+# Local machine configuration & credentials
+local.properties
+app/google-services.json
+debug.keystore
+*.jks
+*.keystore
+*.pem
+*.p12
+*.key
+keystore.properties
+.env
+.env.*
+!.env.example
+*.bak
+*.orig
+*.part
 
-# Kotlin Multiplatform
-/.kotlin
+# Node test tooling
+node_modules/
 
-# Logs
-*.log
+# IDE & OS files
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+*-debug.log
 
-# Reference source repositories (never commit)
-BitChord-main/
-ArchiveTune-main/
-PixelMusic-main/
+# Keep Room exported schema snapshots tracked for MigrationTestHelper
+!app/schemas/
+!app/schemas/**
